@@ -1,3 +1,4 @@
+#include <QScrollArea>
 #include "functiondockwidget.h"
 #include "config.h"
 
@@ -9,14 +10,21 @@ FunctionDockWidget::FunctionDockWidget(QWidget *parent)
 
 void FunctionDockWidget::setupUI()
 {
+    // 创建滚动区域
+    QScrollArea *scrollArea = new QScrollArea();
+    scrollArea->setWidgetResizable(true);  // 重要：让内部widget可以调整大小
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+
     QWidget *mainWidget = new QWidget();
-    setWidget(mainWidget);
+    scrollArea->setWidget(mainWidget);  // 将主widget设置为滚动区域的子widget
+    setWidget(scrollArea);  // 将滚动区域设置为dock的widget
 
     QVBoxLayout *mainLayout = new QVBoxLayout(mainWidget);
 
     // 减少布局间距
-    mainLayout->setSpacing(4);  // 默认值通常是6-8
-    mainLayout->setContentsMargins(6, 6, 6, 6);  // 减少边距
+    mainLayout->setSpacing(4);
+    mainLayout->setContentsMargins(6, 6, 6, 6);
 
     // === 属性组 ===
     QGroupBox *attributeGroup = new QGroupBox("属性");
@@ -56,10 +64,8 @@ void FunctionDockWidget::setupUI()
     QHBoxLayout *opRow1 = new QHBoxLayout();
     delete_btn = new QPushButton("删除");
     align_btn = new QPushButton("对齐");
-    //check_btn = new QPushButton("勾勾(A)");
     opRow1->addWidget(delete_btn);
     opRow1->addWidget(align_btn);
-    //opRow1->addWidget(check_btn);
 
     QHBoxLayout *opRow2 = new QHBoxLayout();
     btn_create_theme = new QPushButton("创建主题");
@@ -106,9 +112,6 @@ void FunctionDockWidget::setupUI()
     paramLayout->addRow("可视可 0-1:", visibility_slider);
     paramLayout->addRow("公共安 0-1:", safety_slider);
     paramLayout->addRow("通道宽 0-1:", channel_slider);
-
-    //auto_calc_check = new QCheckBox("打开文件时自动计算");
-    //paramLayout->addRow(auto_calc_check);
 
     mainLayout->addWidget(paramGroup);
 
@@ -182,7 +185,7 @@ void FunctionDockWidget::setupUI()
     // 添加弹性空间
     mainLayout->addStretch();
 
-    // 设置最小尺寸
+    // 设置固定宽度，让内容自动适应高度
     setMinimumWidth(330);
+    setMaximumWidth(350);  // 设置最大宽度避免过宽
 }
-

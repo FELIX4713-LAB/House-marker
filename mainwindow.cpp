@@ -25,6 +25,8 @@ MainWindow::MainWindow(QWidget *parent)
     int paint_area_size = Config::getInstance().paint_area_size;
     ui->setupUi(this);
 
+    setFixedSize(1400,800);
+
     connect(&House::getInstance(), &House::object_num_change, this, &MainWindow::object_num_change);
 
     this->setWindowTitle("虚拟展厅设计工具");

@@ -13,6 +13,7 @@
 #include <memory>
 #include <vector>
 #include "paintobject.h"
+#include "yolo_detector.h"
 
 class PaintArea : public QWidget
 {
@@ -30,9 +31,12 @@ public:
 private:
     void paintEvent(QPaintEvent*) override;
     QRect calc_rect();
-    void wallDetection(const QImage& inputImage);
+    void wallDetection(const QImage& inputImage);  // 添加函数声明
     QVector<QPoint> traceWallContours(const QImage& edgeImage);
     QVector<QVector<QPoint>> findContinuousWalls(const QVector<QPoint>& contourPoints);
+
+private slots:
+    void onWallDetectionFinished(bool success);
 
 public:
     PaintObject paint_target;
@@ -40,6 +44,7 @@ public:
     std::shared_ptr<BaseRectObject> preview;
 
 private:
+    // 按照声明顺序初始化
     int width;
     int height;
     QPoint global_grab_origin;
@@ -49,9 +54,9 @@ private:
     bool output_flag;
 
     // 墙体检测相关
-    QVector<QVector<QPoint>> wall_contours;  // 检测到的墙体轮廓（折线）
+    QVector<QVector<QPoint>> wall_contours;
     bool walls_detected;
-
+    std::unique_ptr<YOLODetector> yoloDetector;
 
 signals:
     void paint_finished();

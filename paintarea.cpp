@@ -10,48 +10,77 @@
 std::vector<std::pair<QPoint, QPoint>> align_lines;
 
 PaintArea::PaintArea(QWidget *parent, int _width, int _height)
-    : QWidget(parent), width(_width), height(_height), output_flag(false),
-    pix(std::make_unique<QPixmap>(width, height)),
+    : QWidget(parent),
+    width(_width),
+    height(_height),
     preview(std::make_shared<BaseRectObject>(this)),
     paint_target(PaintObject::NONE),
-    walls_detected(false)
+    output_flag(false),
+    pix(std::make_unique<QPixmap>(width, height)),
+    walls_detected(false),
+    yoloDetector(std::make_unique<YOLODetector>(this))
 {
     preview->hide();
 
-    int display_width = std::min(width, 2048);
-    int display_height = std::min(height, 2048);
+    int display_width = std::min(width, 512);
+    int display_height = std::min(height, 1000);
 
     this->setGeometry(0, 0, display_width, display_height);
     House::getInstance().outline = std::make_shared<OutlineWall>(this);
     House::getInstance().outline->setGeometry(0, 0, display_width, display_height);
     House::getInstance().paint_area = this;
     installEventFilter(this);
+
+    connect(yoloDetector.get(), &YOLODetector::detectionFinished,
+            this, &PaintArea::onWallDetectionFinished);
 }
 
 void PaintArea::load_img(const QString& path)
 {
-    if (path != "")
-    {
-        QPixmap tmp = QPixmap(width, height);
-        if (!tmp.load(path)) {
-            qDebug() << "Failed to load image:" << path;
-            return;
-        }
-
-        tmp = tmp.scaled(width, height, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-        bg_pix = std::make_unique<QPixmap>(width, height);
-        bg_pix->fill(Qt::transparent);
-        QPainter painter(bg_pix.get());
-        painter.setOpacity(Config::getInstance().bg_transpacence);
-        painter.drawPixmap(0, 0, tmp);
-        painter.end();
-
-        // 加载图片后自动进行墙体检测
-        detectWalls();
-
-        update();
+    if (path.isEmpty()) {
+        qDebug() << "Empty image path";
+        return;
     }
+
+    QPixmap tmp;
+    if (!tmp.load(path)) {
+        qDebug() << "Failed to load image:" << path;
+        return;
+    }
+
+    // 固定目标宽度为512，计算对应的高度（按原比例缩放）
+    const int targetWidth = 512;
+    // 计算原图宽高比
+    double aspectRatio = static_cast<double>(tmp.height()) / tmp.width();
+    // 根据固定宽度计算目标高度（确保至少为1，避免无效尺寸）
+    int targetHeight = qMax(1, static_cast<int>(targetWidth * aspectRatio));
+
+    // 按计算出的目标尺寸缩放图片（保持比例，平滑缩放）
+    QPixmap scaledPix = tmp.scaled(
+        targetWidth,
+        targetHeight,
+        Qt::KeepAspectRatio,  // 强制保持原比例（避免拉伸）
+        Qt::SmoothTransformation  // 平滑缩放，减少锯齿
+        );
+
+    // 更新画布尺寸为缩放后的图片尺寸
+    width = targetWidth;
+    height = targetHeight;
+
+    // 创建背景图并绘制缩放后的图片
+    bg_pix = std::make_unique<QPixmap>(width, height);
+    bg_pix->fill(Qt::transparent);  // 透明背景
+    QPainter painter(bg_pix.get());
+    painter.setOpacity(Config::getInstance().bg_transpacence);  // 保持原有透明度设置
+    painter.drawPixmap(0, 0, scaledPix);  // 绘制缩放后的图片
+    painter.end();
+
+    // 重新调整窗口显示尺寸（可选，根据需求决定是否跟随图片尺寸）
+    this->setGeometry(this->x(), this->y(), width, height);
+
+    // 加载后自动检测墙体
+    detectWalls();
+    update();
 }
 
 void PaintArea::unload_img()
@@ -88,8 +117,37 @@ void PaintArea::detectWalls()
         return;
     }
 
-    QImage originalImage = bg_pix->toImage();
-    wallDetection(originalImage);
+    qDebug() << "Starting wall detection with YOLO...";
+
+    // 显示检测中的状态
+    wall_contours.clear();
+    walls_detected = false;
+    update();
+
+    // 转换为QImage并检测
+    QImage image = bg_pix->toImage();
+    qDebug() << "Image format:" << image.format();
+    qDebug() << "Image size:" << image.size();
+    if (!yoloDetector->detectWalls(image)) {
+        qDebug() << "Failed to start YOLO detection, using traditional method";
+        wallDetection(image);
+    }
+}
+
+void PaintArea::onWallDetectionFinished(bool success)
+{
+    if (success) {
+        wall_contours = yoloDetector->getWallContours();
+        walls_detected = true;
+        qDebug() << "YOLO detection completed. Found" << wall_contours.size() << "wall segments";
+        emit walls_detected_signal(wall_contours.size());
+    } else {
+        qDebug() << "YOLO detection failed, using traditional method";
+        if (bg_pix && !bg_pix->isNull()) {
+            wallDetection(bg_pix->toImage());
+        }
+    }
+    update();
 }
 
 void PaintArea::clearWalls()
@@ -99,23 +157,102 @@ void PaintArea::clearWalls()
     update();
 }
 
+// 传统墙体检测方法
+void PaintArea::wallDetection(const QImage& inputImage)
+{
+    wall_contours.clear();
+
+    if (inputImage.isNull()) return;
+
+    // 转换为灰度图像
+    QImage grayImage = inputImage.convertToFormat(QImage::Format_Grayscale8);
+    int width = grayImage.width();
+    int height = grayImage.height();
+
+    // 步骤1: 针对性二值化（墙体为深色，设为白色；背景为浅色，设为黑色）
+    QImage binaryImage(width, height, QImage::Format_Grayscale8);
+    int wallThreshold = 100; // 降低阈值，确保深色墙体被识别（可根据实际效果微调）
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int brightness = qRed(grayImage.pixel(x, y));
+            if (brightness < wallThreshold) {
+                binaryImage.setPixel(x, y, qRgb(255, 255, 255)); // 墙体像素设为白色
+            } else {
+                binaryImage.setPixel(x, y, qRgb(0, 0, 0));       // 背景设为黑色
+            }
+        }
+    }
+
+    // 步骤2: 形态学操作（膨胀+腐蚀，强化墙体线条并去除噪声）
+    QImage morphImage = binaryImage;
+    // 先膨胀（让细线条变粗，避免断裂）
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            if (qRed(binaryImage.pixel(x, y)) == 255) {
+                // 膨胀：只要3x3邻域有墙体像素，就保留当前点
+                bool hasWall = true;
+                for (int i = -1; i <= 1; ++i) {
+                    for (int j = -1; j <= 1; ++j) {
+                        if (qRed(binaryImage.pixel(x+j, y+i)) == 255) {
+                            hasWall = true;
+                            break;
+                        }
+                    }
+                    if (hasWall) break;
+                }
+                if (hasWall) {
+                    morphImage.setPixel(x, y, qRgb(255, 255, 255));
+                }
+            }
+        }
+    }
+    // 再腐蚀（去除膨胀带来的多余噪声）
+    for (int y = 1; y < height - 1; ++y) {
+        for (int x = 1; x < width - 1; ++x) {
+            if (qRed(morphImage.pixel(x, y)) == 255) {
+                // 腐蚀：3x3邻域全为墙体像素才保留，否则设为背景
+                bool allWall = true;
+                for (int i = -1; i <= 1; ++i) {
+                    for (int j = -1; j <= 1; ++j) {
+                        if (qRed(morphImage.pixel(x+j, y+i)) == 0) {
+                            allWall = false;
+                            break;
+                        }
+                    }
+                    if (!allWall) break;
+                }
+                if (!allWall) {
+                    morphImage.setPixel(x, y, qRgb(0, 0, 0));
+                }
+            }
+        }
+    }
+
+    // 步骤3: 追踪轮廓并找到连续墙体
+    QVector<QPoint> contourPoints = traceWallContours(morphImage);
+    wall_contours = findContinuousWalls(contourPoints);
+
+    walls_detected = true;
+    qDebug() << "Traditional wall detection completed. Found" << wall_contours.size() << "wall segments";
+    emit walls_detected_signal(wall_contours.size());
+
+    update();
+}
+
 QVector<QPoint> PaintArea::traceWallContours(const QImage& edgeImage)
 {
     QVector<QPoint> contourPoints;
     int width = edgeImage.width();
     int height = edgeImage.height();
 
-    // 使用区域生长法追踪轮廓
     QImage visited(width, height, QImage::Format_Grayscale8);
     visited.fill(0);
 
-    // 8个方向的邻域
     int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
     int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
 
     for (int y = 1; y < height - 1; ++y) {
         for (int x = 1; x < width - 1; ++x) {
-            // 如果当前点是边缘点且未被访问
             if (qRed(edgeImage.pixel(x, y)) > 128 && qRed(visited.pixel(x, y)) == 0) {
                 std::queue<QPoint> queue;
                 queue.push(QPoint(x, y));
@@ -126,7 +263,6 @@ QVector<QPoint> PaintArea::traceWallContours(const QImage& edgeImage)
                     queue.pop();
                     contourPoints.append(current);
 
-                    // 检查8邻域
                     for (int i = 0; i < 8; ++i) {
                         int nx = current.x() + dx[i];
                         int ny = current.y() + dy[i];
@@ -152,12 +288,10 @@ QVector<QVector<QPoint>> PaintArea::findContinuousWalls(const QVector<QPoint>& c
     QVector<QVector<QPoint>> walls;
     if (contourPoints.isEmpty()) return walls;
 
-    // 将lambda函数显式声明为std::function
     std::function<QVector<QPoint>(const QVector<QPoint>&, double)> douglasPeucker;
     douglasPeucker = [&douglasPeucker](const QVector<QPoint>& points, double epsilon) -> QVector<QPoint> {
         if (points.size() <= 2) return points;
 
-        // 找到离首尾连线最远的点
         double maxDistance = 0;
         int index = 0;
         QPoint p1 = points.first();
@@ -176,21 +310,20 @@ QVector<QVector<QPoint>> PaintArea::findContinuousWalls(const QVector<QPoint>& c
             }
         }
 
-        // 如果最大距离大于阈值，递归处理
         if (maxDistance > epsilon) {
             QVector<QPoint> result1 = douglasPeucker(points.mid(0, index + 1), epsilon);
             QVector<QPoint> result2 = douglasPeucker(points.mid(index), epsilon);
 
-            result1.removeLast(); // 避免重复点
+            result1.removeLast();
             return result1 + result2;
         } else {
             return {points.first(), points.last()};
         }
     };
 
-    // 将轮廓点分组为连续的墙体段
     QVector<QPoint> currentWall;
-    const int maxGap = 5; // 最大允许的断点距离
+    const int maxGap = 10;
+    const int minWallLength = 20;
 
     for (int i = 0; i < contourPoints.size(); ++i) {
         if (currentWall.isEmpty()) {
@@ -199,16 +332,14 @@ QVector<QVector<QPoint>> PaintArea::findContinuousWalls(const QVector<QPoint>& c
             QPoint lastPoint = currentWall.last();
             QPoint currentPoint = contourPoints[i];
 
-            // 计算两点之间的距离
             double distance = std::sqrt(std::pow(currentPoint.x() - lastPoint.x(), 2) +
                                         std::pow(currentPoint.y() - lastPoint.y(), 2));
 
             if (distance <= maxGap) {
                 currentWall.append(currentPoint);
             } else {
-                // 当前段结束，开始新的一段
-                if (currentWall.size() > 10) { // 只保留足够长的墙体段
-                    QVector<QPoint> simplified = douglasPeucker(currentWall, 2.0);
+                if (currentWall.size() > minWallLength) {
+                    QVector<QPoint> simplified = douglasPeucker(currentWall, 3.0);
                     walls.append(simplified);
                 }
                 currentWall.clear();
@@ -217,87 +348,12 @@ QVector<QVector<QPoint>> PaintArea::findContinuousWalls(const QVector<QPoint>& c
         }
     }
 
-    // 添加最后一段
-    if (currentWall.size() > 10) {
-        QVector<QPoint> simplified = douglasPeucker(currentWall, 2.0);
+    if (currentWall.size() > minWallLength) {
+        QVector<QPoint> simplified = douglasPeucker(currentWall, 3.0);
         walls.append(simplified);
     }
 
     return walls;
-}
-
-void PaintArea::wallDetection(const QImage& inputImage)
-{
-    wall_contours.clear();
-
-    if (inputImage.isNull()) return;
-
-    // 转换为灰度图像
-    QImage grayImage = inputImage.convertToFormat(QImage::Format_Grayscale8);
-    int width = grayImage.width();
-    int height = grayImage.height();
-
-    // 步骤1: 简单的二值化处理（针对户型图的特性）
-    QImage binaryImage(width, height, QImage::Format_Grayscale8);
-
-    // 计算图像的平均亮度
-    long totalBrightness = 0;
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            totalBrightness += qRed(grayImage.pixel(x, y));
-        }
-    }
-    int averageBrightness = totalBrightness / (width * height);
-
-    // 基于平均亮度进行二值化
-    int wallThreshold = averageBrightness /*- 15*/; // 墙体通常较暗
-    if (wallThreshold < 50) wallThreshold = 50; // 确保阈值不太低
-
-    for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-            int brightness = qRed(grayImage.pixel(x, y));
-            if (brightness < wallThreshold) {
-                binaryImage.setPixel(x, y, qRgb(255, 255, 255)); // 墙体为白色
-            } else {
-                binaryImage.setPixel(x, y, qRgb(0, 0, 0)); // 背景为黑色
-            }
-        }
-    }
-
-    // 步骤2: 形态学操作（去除噪声）
-    QImage morphImage = binaryImage;
-
-    // 简单的腐蚀操作
-    for (int y = 1; y < height - 1; ++y) {
-        for (int x = 1; x < width - 1; ++x) {
-            if (qRed(binaryImage.pixel(x, y)) == 255) {
-                // 检查3x3邻域，如果周围有背景点，则腐蚀当前点
-                bool hasBackground = false;
-                for (int i = -1; i <= 1; ++i) {
-                    for (int j = -1; j <= 1; ++j) {
-                        if (qRed(binaryImage.pixel(x+j, y+i)) == 0) {
-                            hasBackground = true;
-                            break;
-                        }
-                    }
-                    if (hasBackground) break;
-                }
-                if (hasBackground) {
-                    morphImage.setPixel(x, y, qRgb(0, 0, 0));
-                }
-            }
-        }
-    }
-
-    // 步骤3: 追踪轮廓并找到连续墙体
-    QVector<QPoint> contourPoints = traceWallContours(morphImage);
-    wall_contours = findContinuousWalls(contourPoints);
-
-    walls_detected = true;
-    qDebug() << "Wall detection completed. Found" << wall_contours.size() << "wall segments";
-    emit walls_detected_signal(wall_contours.size());
-
-    update();
 }
 
 bool PaintArea::eventFilter(QObject *watched, QEvent *event)
@@ -418,7 +474,6 @@ bool PaintArea::eventFilter(QObject *watched, QEvent *event)
             return true;
         }
     }
-
 
     return QWidget::eventFilter(watched, event);
 }

@@ -126,11 +126,11 @@
       </property>
      </widget>
     </item>
-    <item>
+    <item alignment="Qt::AlignLeft">
      <widget class="QWidget" name="widget_paint" native="true">
       <property name="minimumSize">
        <size>
-        <width>256</width>
+        <width>512</width>
         <height>256</height>
        </size>
       </property>

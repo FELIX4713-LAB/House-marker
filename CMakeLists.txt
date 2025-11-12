@@ -32,6 +32,8 @@ if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
         json.hpp
         functiondockwidget.h
         functiondockwidget.cpp
+        yolo_detector.h
+        yolo_detector.cpp
 
 
 
