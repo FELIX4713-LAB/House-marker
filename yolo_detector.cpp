@@ -46,12 +46,77 @@ import traceback
 
 print("DEBUG: Python script started", file=sys.stderr)
 
-def remove_transparency_and_process(image_path):
-    """处理透明背景图片"""
+def close_single_wall_contours(contours, image_shape):
+    """将单段墙体轮廓强制闭合"""
+    closed_contours = []
+
+    for contour in contours:
+        if len(contour) >= 2:
+            # 如果只有2个点（单线段），创建矩形闭合
+            if len(contour) == 2:
+                print(f"DEBUG: Closing single segment wall with 2 points", file=sys.stderr)
+                p1 = contour[0]
+                p2 = contour[1]
+
+                # 计算线段方向和长度
+                dx = p2[0] - p1[0]
+                dy = p2[1] - p1[1]
+                length = np.sqrt(dx*dx + dy*dy)
+
+                if length > 0:
+                    # 创建墙体厚度（垂直于线段方向）
+                    wall_thickness = max(5, min(15, int(length * 0.1)))  # 动态厚度
+
+                    # 计算垂直方向
+                    if abs(dx) > abs(dy):  # 近似水平线
+                        closed_contour = [
+                            [p1[0], p1[1] - wall_thickness//2],
+                            [p2[0], p2[1] - wall_thickness//2],
+                            [p2[0], p2[1] + wall_thickness//2],
+                            [p1[0], p1[1] + wall_thickness//2]
+                        ]
+                    else:  # 近似垂直线
+                        closed_contour = [
+                            [p1[0] - wall_thickness//2, p1[1]],
+                            [p1[0] + wall_thickness//2, p1[1]],
+                            [p2[0] + wall_thickness//2, p2[1]],
+                            [p2[0] - wall_thickness//2, p2[1]]
+                        ]
+                    closed_contours.append(closed_contour)
+                else:
+                    closed_contours.append(contour)
+
+            # 如果只有3个点，添加第4个点形成四边形
+            elif len(contour) == 3:
+                print(f"DEBUG: Closing 3-point wall contour", file=sys.stderr)
+                # 复制第一个点作为最后一个点，形成闭合
+                closed_contour = contour + [contour[0]]
+                closed_contours.append(closed_contour)
+
+            # 对于4个点以上的轮廓，确保首尾相连
+            else:
+                # 检查是否已经闭合（首尾点相同）
+                first_point = contour[0]
+                last_point = contour[-1]
+                distance = np.sqrt((first_point[0]-last_point[0])**2 + (first_point[1]-last_point[1])**2)
+
+                if distance > 5:  # 首尾点距离较大，需要闭合
+                    print(f"DEBUG: Closing multi-point wall contour with {len(contour)} points", file=sys.stderr)
+                    closed_contour = contour + [contour[0]]
+                    closed_contours.append(closed_contour)
+                else:
+                    # 已经近似闭合，直接使用
+                    closed_contours.append(contour)
+
+    print(f"DEBUG: Closed {len(closed_contours)} wall contours", file=sys.stderr)
+    return closed_contours
+
+def detect_walls_optimized(image_path):
+    """优化的墙体检测方法，专门处理户型图"""
     try:
         print(f"DEBUG: Loading image from {image_path}", file=sys.stderr)
 
-        # 读取图像（保持alpha通道）
+        # 处理透明背景
         img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if img is None:
             print("ERROR: Failed to load image", file=sys.stderr)
@@ -82,21 +147,6 @@ def remove_transparency_and_process(image_path):
             if len(img.shape) == 2:
                 # 如果是灰度图，转换为BGR
                 img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-        return img
-
-    except Exception as e:
-        print(f"ERROR in transparency processing: {str(e)}", file=sys.stderr)
-        print(f"TRACEBACK: {traceback.format_exc()}", file=sys.stderr)
-        return None
-
-def detect_walls_optimized(image_path):
-    """优化的墙体检测方法，专门处理户型图"""
-    try:
-        # 处理透明背景
-        img = remove_transparency_and_process(image_path)
-        if img is None:
-            return []
 
         # 转换为灰度图
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -152,8 +202,14 @@ def detect_walls_optimized(image_path):
                     wall_contours.append(points)
                     print(f"DEBUG: Added contour {i} with {len(points)} points, area={area:.1f}", file=sys.stderr)
 
-        print(f"DEBUG: Returning {len(wall_contours)} wall contours", file=sys.stderr)
-        return wall_contours
+        print(f"DEBUG: Before closing: {len(wall_contours)} wall contours", file=sys.stderr)
+
+        # 强制闭合单段墙体
+        closed_wall_contours = close_single_wall_contours(wall_contours, gray.shape)
+
+        print(f"DEBUG: After closing: {len(closed_wall_contours)} closed wall contours", file=sys.stderr)
+
+        return closed_wall_contours
 
     except Exception as e:
         print(f"ERROR in wall detection: {str(e)}", file=sys.stderr)
@@ -190,7 +246,7 @@ if __name__ == "__main__":
 )";
         scriptFile.close();
         yoloAvailable = true;
-        qDebug() << "Python script created at:" << scriptPath;
+        qDebug() << "Python script updated with wall closing functionality";
     } else {
         yoloAvailable = false;
         qDebug() << "Failed to create Python script";

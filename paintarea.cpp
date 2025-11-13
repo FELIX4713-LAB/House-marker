@@ -67,12 +67,17 @@ void PaintArea::load_img(const QString& path)
     width = targetWidth;
     height = targetHeight;
 
-    // 创建背景图并绘制缩放后的图片
+    // 创建背景图并绘制缩放后的图片（靠左上角，与顶部距离10像素）
     bg_pix = std::make_unique<QPixmap>(width, height);
     bg_pix->fill(Qt::transparent);  // 透明背景
+
     QPainter painter(bg_pix.get());
     painter.setOpacity(Config::getInstance().bg_transpacence);  // 保持原有透明度设置
-    painter.drawPixmap(0, 0, scaledPix);  // 绘制缩放后的图片
+
+    // 图片位置：x=0靠左，y=10与顶部距离10像素
+    const int topMargin = 10;
+    painter.drawPixmap(0, topMargin, scaledPix);
+
     painter.end();
 
     // 重新调整窗口显示尺寸（可选，根据需求决定是否跟随图片尺寸）
@@ -486,21 +491,25 @@ void PaintArea::paintEvent(QPaintEvent *)
     if (bg_pix && !output_flag)
         pix_painter.drawPixmap(0, 0, width, height, *bg_pix);
 
-    // 绘制检测到的墙体轮廓（折线）
+    // 绘制检测到的墙体轮廓（闭合图形）
     if (!output_flag && walls_detected && !wall_contours.empty()) {
+        // 设置绘制样式
         pix_painter.setPen(QPen(QColor(255, 0, 0, 200), 3, Qt::SolidLine));
+        pix_painter.setBrush(QBrush(QColor(255, 0, 0, 50))); // 半透明红色填充
 
         for (const QVector<QPoint>& wall : wall_contours) {
-            if (wall.size() >= 2) {
-                // 绘制折线
-                for (int i = 0; i < wall.size() - 1; ++i) {
-                    pix_painter.drawLine(wall[i], wall[i+1]);
-                }
+            if (wall.size() >= 3) {
+                // 绘制闭合多边形（有填充）
+                pix_painter.drawPolygon(wall.data(), wall.size());
+            } else if (wall.size() == 2) {
+                // 如果只有2个点，绘制线段（后备方案）
+                pix_painter.drawLine(wall[0], wall[1]);
             }
         }
 
         // 显示检测到的墙体段数量
         pix_painter.setPen(QPen(Qt::blue, 2));
+        pix_painter.setBrush(Qt::NoBrush); // 恢复无填充
         pix_painter.drawText(10, 20, QString("检测到 %1 段墙体").arg(wall_contours.size()));
     }
 
