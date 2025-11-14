@@ -145,6 +145,10 @@ void PaintArea::onWallDetectionFinished(bool success)
         wall_contours = yoloDetector->getWallContours();
         walls_detected = true;
         qDebug() << "YOLO detection completed. Found" << wall_contours.size() << "wall segments";
+
+        // 自动转换为轮廓
+        convertWallsToOutline();
+
         emit walls_detected_signal(wall_contours.size());
     } else {
         qDebug() << "YOLO detection failed, using traditional method";
@@ -159,6 +163,12 @@ void PaintArea::clearWalls()
 {
     wall_contours.clear();
     walls_detected = false;
+
+    // 同时清空轮廓点
+    if (House::getInstance().outline) {
+        House::getInstance().outline->points.clear();
+    }
+
     update();
 }
 
@@ -241,6 +251,15 @@ void PaintArea::wallDetection(const QImage& inputImage)
     qDebug() << "Traditional wall detection completed. Found" << wall_contours.size() << "wall segments";
     emit walls_detected_signal(wall_contours.size());
 
+    update();
+
+    walls_detected = true;
+    qDebug() << "Traditional wall detection completed. Found" << wall_contours.size() << "wall segments";
+
+    // 自动转换为轮廓
+    convertWallsToOutline();
+
+    emit walls_detected_signal(wall_contours.size());
     update();
 }
 
@@ -494,8 +513,8 @@ void PaintArea::paintEvent(QPaintEvent *)
     // 绘制检测到的墙体轮廓（闭合图形）
     if (!output_flag && walls_detected && !wall_contours.empty()) {
         // 设置绘制样式
-        pix_painter.setPen(QPen(QColor(255, 0, 0, 200), 3, Qt::SolidLine));
-        pix_painter.setBrush(QBrush(QColor(255, 0, 0, 50))); // 半透明红色填充
+        pix_painter.setPen(QPen(QColor(225, 0, 0, 100), 0.3, Qt::SolidLine));
+        pix_painter.setBrush(QBrush(QColor(255, 0, 0, 25))); // 半透明红色填充
 
         for (const QVector<QPoint>& wall : wall_contours) {
             if (wall.size() >= 3) {
@@ -534,4 +553,28 @@ QRect PaintArea::calc_rect()
     int x_r = std::max({point_pair.first.x(), point_pair.second.x()});
     int y_r = std::max({point_pair.first.y(), point_pair.second.y()});
     return QRect(x, y, x_r-x, y_r-y);
+}
+
+void PaintArea::convertWallsToOutline()
+{
+    if (wall_contours.isEmpty() || !House::getInstance().outline) {
+        return;
+    }
+
+    // 清空现有轮廓点
+    House::getInstance().outline->points.clear();
+
+    // 将墙体轮廓点转换为轮廓点
+    for (const QVector<QPoint>& wallSegment : wall_contours) {
+        for (const QPoint& point : wallSegment) {
+            // 使用 push_back 添加到轮廓点数组
+            House::getInstance().outline->points.push_back(point);
+        }
+    }
+
+    qDebug() << "Auto-converted" << wall_contours.size() << "wall segments to outline with"
+             << House::getInstance().outline->points.size() << "points";
+
+    // 触发重绘
+    update();
 }

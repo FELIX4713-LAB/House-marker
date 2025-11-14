@@ -31,9 +31,11 @@ public:
 private:
     void paintEvent(QPaintEvent*) override;
     QRect calc_rect();
-    void wallDetection(const QImage& inputImage);  // 添加函数声明
+    void wallDetection(const QImage& inputImage);
     QVector<QPoint> traceWallContours(const QImage& edgeImage);
     QVector<QVector<QPoint>> findContinuousWalls(const QVector<QPoint>& contourPoints);
+    //检测到的直接转换为鼠标绘制的轮廓
+    void convertWallsToOutline();
 
 private slots:
     void onWallDetectionFinished(bool success);
@@ -44,7 +46,6 @@ public:
     std::shared_ptr<BaseRectObject> preview;
 
 private:
-    // 按照声明顺序初始化
     int width;
     int height;
     QPoint global_grab_origin;

@@ -29,6 +29,26 @@ public:
     }
     void align(int delta, int angle_delta);
 
+    // 用YOLO识别结果替换手动绘制的轮廓
+    void setYOLOContours(const QVector<QVector<QPoint>>& contours);
+
+    // 清除所有轮廓
+    void clearContours() {
+        points.clear();
+        completed = false;
+        update();
+    }
+
+    // 获取轮廓顶点
+    std::vector<QPointF> getContourPoints() const {
+        return points;
+    }
+
+    // 检查是否有轮廓数据
+    bool hasContours() const {
+        return !points.empty();
+    }
+
 protected:
     void paintEvent(QPaintEvent *event) override;
 
